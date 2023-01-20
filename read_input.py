@@ -8,22 +8,24 @@ import threading
 from dataclasses import dataclass
 from typing import Union, List, Tuple
 
+from config import config
 
-CSGO_HWIN = "Counter-Strike: Global Offensive - Direct3D 9"
+hwin = config["HWIN"]
+fps = config["FPS"]
+QUEUE_SIZE = config["Buffer_Size"]
+output_dir = config["Output_Dir"]
 
 active = False
-fps = 30
-
-output_dir = r"E:\test_screenshot"
-# output_dir = r"C:\Users\Raphael\Desktop\screenshot_test"
-
 threads = []
-QUEUE_SIZE = 2048
 Q = Queue(maxsize=QUEUE_SIZE)
 
 
 @dataclass(frozen=True)
 class Snapshot:
+    """
+    Dataclass for storing a snapshot of the game
+    """
+
     iteration: int
     image: Union[np.ndarray, screenshot.ScreenShot]
     pressed_keys: List[str]
@@ -41,6 +43,14 @@ class Snapshot:
 
 
 def get_keys(use_key_list=False):
+    """Returns a list of currently pressed keys.
+
+    Args:
+        use_key_list (bool, optional): Only check predefined keys like 'W','A','S','D' etc. . Defaults to False.
+
+    Returns:
+        List[str]]: List of currently pressed keys
+    """
     keys = []
     if use_key_list:
         # mouse1 = 0x01
@@ -60,6 +70,13 @@ def get_keys(use_key_list=False):
 
 
 def grabber():
+    """
+    Thread for grabbing snapshots of the game and putting them in the queue.
+    Starts with a short warmup period.
+
+    Runs until the active flag is set to False.
+
+    """
     WARMUP_SECONDS = 5
 
     n_screenshots = -fps * WARMUP_SECONDS  #  2 seconds warmup
@@ -76,7 +93,7 @@ def grabber():
                 print(f"Queue size: {Q.qsize()}")
 
                 if behind > 5 and n_screenshots >= 0:
-                    print(f"Behind by {behind} screenshots")
+                    print(f"Behind by {int(behind)} frames")
                 if Q.full():
                     raise RuntimeWarning("Queue is full!")
 
@@ -95,7 +112,6 @@ def grabber():
                 valid = n_screenshots >= 0
                 Q.put((valid, s))
                 n_screenshots += 1
-                time.sleep(0.005)  # 200 fps
             else:
                 time.sleep(0.01)  # 100 fps
         else:
@@ -103,6 +119,11 @@ def grabber():
 
 
 def saver():
+    """
+    Thread for saving snapshots to disk.
+    Runs until the active flag is set to False.
+
+    """
     while True:
         if active or not Q.empty():
             if not Q.empty():
@@ -120,6 +141,9 @@ def saver():
 
 
 def start_threads():
+    """
+    Starts the grabber and saver threads.
+    """
     global active
     global Q
     global threads
@@ -139,6 +163,10 @@ def start_threads():
 
 
 def stop_threads():
+    """
+    Stops the grabber and saver threads.
+    """
+
     global active
     global threads
 
@@ -149,6 +177,18 @@ def stop_threads():
 
 
 def grab_window(hwin):
+    """
+    Takes a screenshot of the window with the given handle. Returns a numpy array.
+
+    Args:
+        hwin (_type_): Handle of the window to take a screenshot of.
+
+    Raises:
+        RuntimeWarning: Window is not found
+
+    Returns:
+        np.ndarray: Numpy array of the screenshot of the window.
+    """
     try:
         (left, top, right, bottom) = win32gui.GetWindowRect(hwin)
         width = right - left
@@ -186,6 +226,15 @@ def grab_window(hwin):
 
 
 def get_hwin(guessed_name):
+    """
+    Finds the handle of the window with the given name.
+
+    Args:
+        guessed_name (_type_): Name of the window to find.
+
+    Returns:
+        int: Handle of the window with the given name.
+    """
     top_windows = []
     windowEnumerationHandler = lambda x, y: y.append(x)
     win32gui.EnumWindows(windowEnumerationHandler, top_windows)
@@ -203,6 +252,16 @@ def get_hwin(guessed_name):
 
 
 def grab(hwin=None):
+    """Grabs a screenshot of the given window or the primary monitor.
+    If the window is not found, it falls back to mss.
+    Mss is a bit slower, but it works on all platforms.
+
+    Args:
+        hwin (str, optional): Name of the window to look for. Defaults to None.
+
+    Returns:
+        Union(np.ndarray, screenshot.ScreenShot): Screenshot of the given window or the primary monitor. Type depends on the method used.
+    """
     if hwin:
         try:
             return grab_window(get_hwin(hwin))
@@ -214,7 +273,16 @@ def grab(hwin=None):
         return sct.grab(sct.monitors[1])
 
 
-def save(img, out_path):
+def save(img: Union[np.ndarray, screenshot.ScreenShot], out_path: os.PathLike):
+    """Saves the given image to disk.
+
+    Args:
+        img (np.ndarray, screenshot.ScreenShot): Image to save.
+        out_path (os.PathLike): Path to save the image to.
+
+    Raises:
+        RuntimeError: Unknown type of the image.
+    """
     if isinstance(
         img,
         screenshot.ScreenShot,
@@ -228,14 +296,21 @@ def save(img, out_path):
 
 
 def grab_csgo():
-    global CSGO_HWIN
-    return grab(hwin=CSGO_HWIN)
+    """
+    Shortcut for grabbing a screenshot of CSGO.
+
+    Returns:
+        Union(np.ndarray, screenshot.ScreenShot): Screenshot of CSGO.
+    """
+    global hwin
+    return grab(hwin)
 
 
 if __name__ == "__main__":
+    # example usage
     start = time.perf_counter()
     start_threads()
-    time.sleep(30)
+    time.sleep(20)
     stop_threads()
     end = time.perf_counter()
     print(f"Time elapsed: {end - start} seconds")
