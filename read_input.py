@@ -8,9 +8,10 @@ from datetime import datetime
 from pandas import DataFrame
 from config import config
 import logging
-from multiprocessing import Process, Queue, Value
+from multiprocessing import Process, Queue, Value, Pipe
 from threading import Thread
 from queue import Queue as ThreadQueue
+import cv2
 
 
 @dataclass(frozen=True)
@@ -34,92 +35,48 @@ class Snapshot:
         return d.strftime("%Y-%m-%d_%H-%M-%S.%f")
 
 
-def create_snapshot():
-    time_ns = time.time_ns()
-    pressed_keys = get_keys()
-    with mss() as sct:
-        img = sct.grab(sct.monitors[1])
-    mouse_position = (0, 0)  # win32api.GetCursorPos()
-    return Snapshot(img, pressed_keys, mouse_position, time_ns)
-
-
 def producer(queue: Queue, active: Value, warmup_seconds=5, fps=30):
     n_snapshots = 0
     start_time = time.time()
+    sct = mss()
 
     while active.value:
         current_time = time.time()
         time_since_start = current_time - start_time
         frames_behind = time_since_start * fps - n_snapshots
         if frames_behind > 0:
-            if queue.full():
-                print("Queue is full", flush=True)
-                raise RuntimeError("Queue is full")
             if frames_behind > 1:
                 logging.warning(f"{frames_behind} frames behind")
-            snapshot = create_snapshot()
+
+            # create snapshot
+            time_ns = time.time_ns()
+            pressed_keys = get_keys(use_key_list=True)
+            img = sct.grab(sct.monitors[1])
+            mouse_position = (0, 0)  # win32api.GetCursorPos()
+            snapshot = Snapshot(img, pressed_keys, mouse_position, time_ns)
+
             n_snapshots += 1
             if time_since_start > warmup_seconds:
+                # save snapshot if warmup is over
                 queue.put(snapshot)
+                pass
         else:
-            time.sleep(0.005)  # sleep for 5 ms
+            time.sleep(0.001)  # 100 FPS
 
     queue.put(None)  # signal the consumer to stop
 
 
-def save_image(queue):
-    while True:
-        val = queue.get()
-        if val is None:
-            break
-        else:
-            img, out_path = val
-            tools.to_png(img.rgb, img.size, output=out_path)
-        time.sleep(0.01)
+def save(image: screenshot.ScreenShot, output_path: os.PathLike):
+    # tools.to_png(image.rgb, image.size, output=output_path)
+
+    arr = np.array(image)
+    # print(arr.shape)
+    # print(arr.dtype)
+
+    # save the image
+    cv2.imwrite(output_path, arr)
 
 
-def consumer(queue, output_dir):
-    data = []
-
-    threads = []
-    thread_queue = ThreadQueue()
-
-    for _ in range(5):
-        t = Thread(target=save_image, args=(thread_queue,))
-        threads.append(t)
-        t.start()
-
-    while True:
-        s = queue.get()
-        if s is None:
-            # stop producer
-            break
-        file_name = f"{s.timestamp}.png"
-        full_path = os.path.join(output_dir, file_name)
-
-        # tools.to_png(s.img.rgb, s.img.size, output=full_path)
-        thread_queue.put((s.img, full_path))
-
-        data.append(
-            {
-                "timestamp": s.timestamp,
-                "keys": s.pressed_keys,
-                "mouse_position": s.mouse_position,
-            }
-        )
-    data = DataFrame(data)
-    data.to_csv(os.path.join(output_dir, "data.csv"))
-
-    # stop all threads
-    for t in threads:
-        # put None in the queue to signal the thread to stop
-        thread_queue.put(None)
-
-    for t in threads:
-        t.join()
-
-
-"""
 def consumer(queue, output_dir):
     data = []
 
@@ -131,7 +88,7 @@ def consumer(queue, output_dir):
         file_name = f"{s.timestamp}.png"
         full_path = os.path.join(output_dir, file_name)
 
-        tools.to_png(s.img.rgb, s.img.size, output=full_path)
+        save(s.image, full_path)
 
         data.append(
             {
@@ -142,7 +99,6 @@ def consumer(queue, output_dir):
         )
     data = DataFrame(data)
     data.to_csv(os.path.join(output_dir, "data.csv"))
-"""
 
 
 class DataManager:
@@ -213,7 +169,7 @@ def get_keys(use_key_list=False):
 
 
 def main():
-    fps = 25
+    fps = 35
     root_path = config["Output_Dir"]
     q_size = config["Buffer_Size"]
 
@@ -224,6 +180,7 @@ def main():
 
     # create a queue to store the images
     Q = Queue(maxsize=q_size)
+
     active = Value("b", True)
 
     # start processes
